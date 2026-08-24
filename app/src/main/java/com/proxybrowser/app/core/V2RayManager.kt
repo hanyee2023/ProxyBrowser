@@ -39,7 +39,6 @@ object V2RayManager {
             return false
         }
 
-        activeNode = node
         return try {
             val cmd = listOf(binaryPath, "run", "-c", configFile.absolutePath)
             val pb = ProcessBuilder(cmd)
@@ -73,6 +72,7 @@ object V2RayManager {
                 return false
             }
             running = true
+            activeNode = node
             Log.i(TAG, "xray started for ${node.name}")
             applySystemProxy(ctx)
             true
@@ -149,7 +149,10 @@ object V2RayManager {
     }
 
     private fun extractXray(ctx: Context): String? {
-        val dest = File(ctx.filesDir, "xray")
+        // Android 10+ 禁止在 filesDir 执行二进制；nativeLibraryDir 仍可执行
+        val nativeDir = ctx.applicationInfo.nativeLibraryDir?.let { File(it) }
+        val destDir = if (nativeDir != null && nativeDir.exists()) nativeDir else ctx.filesDir
+        val dest = File(destDir, "xray")
         if (dest.exists() && dest.canExecute() && dest.length() > 0) return dest.absolutePath
         return try {
             ctx.assets.open("xray/xray").use { inStream ->
