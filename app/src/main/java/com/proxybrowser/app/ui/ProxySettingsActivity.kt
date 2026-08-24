@@ -256,10 +256,11 @@ class ProxySettingsActivity : AppCompatActivity() {
 
     // ============ 连接 ============
     private fun connectTo(n: ProxyNode) {
-        NodeStore.setActive(this, n)
         if (V2RayManager.start(this, n)) {
+            NodeStore.setActive(this, n)
             Toast.makeText(this, "已连接：${n.name}", Toast.LENGTH_SHORT).show()
         } else {
+            NodeStore.setActive(this, null)
             Toast.makeText(this, "连接失败，请检查节点配置", Toast.LENGTH_LONG).show()
         }
         rebuild()
