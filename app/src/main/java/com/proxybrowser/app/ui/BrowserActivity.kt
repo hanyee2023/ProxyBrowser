@@ -325,17 +325,6 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
 
-    /** 主页底部状态文字随真实代理状态更新（之前一直显示「代理未开启」） */
-    private fun reflectProxyOnHome() {
-        val w = activeWebView() ?: return
-        if (activeTab()?.isHome != true) return
-        val ok = V2RayManager.isRunning()
-        val dot = if (ok) "#22C55E" else "#c7c7cc"
-        val text = if (ok) "代理已开启（盾牌为绿色）" else "代理未开启"
-        val js = "(function(){var d=document.getElementById('proxyDot');var t=document.getElementById('proxyDetail');if(d)d.style.background='$dot';if(t)t.textContent='$text';})()"
-        w.evaluateJavascript(js, null)
-    }
-
     private fun toggleProxy() {
         if (V2RayManager.isRunning()) {
             V2RayManager.stop()
@@ -481,7 +470,6 @@ class BrowserActivity : AppCompatActivity() {
         AdBlocker.loadEnabled(this)
         updateShield()
         refreshNavButtons()
-        reflectProxyOnHome()
     }
 
     override fun onDestroy() {
@@ -496,23 +484,19 @@ class BrowserActivity : AppCompatActivity() {
         private val tag = "ProxyClient"
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val url = request.url
-            val scheme = url.scheme?.lowercase() ?: ""
-            // http/https 交给 WebView 自己处理
-            if (scheme == "http" || scheme == "https") return false
-            // 已知的可调用外部 App 的 scheme
-            when {
-                scheme == "mailto" || scheme == "tel" || scheme == "sms" -> {
-                    try { startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (_: Exception) {}
-                    return true
-                }
-                scheme == "intent" -> {
-                    try { startActivity(Intent.parseUri(url.toString(), Intent.URI_INTENT_SCHEME)) } catch (_: Exception) {}
-                    return true
-                }
+            val url = request.url.toString()
+            val scheme = request.url.scheme ?: ""
+            if (url.startsWith("mailto:") || url.startsWith("tel:") || url.startsWith("sms:") ||
+                url.startsWith("intent:") || url.startsWith("magnet:") || url.endsWith(".apk", true)
+            ) {
+                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
+                return true
             }
-            // 其它自定义 scheme（baiduboxapp://、weixin:// 等）直接拦截，不让 WebView 加载
-            return true
+            // 拦截非 http/https 的私有 scheme（如 baiduboxapp://），避免 ERR_UNKNOWN_URL_SCHEME
+            if (scheme != "http" && scheme != "https" && scheme != "about" && scheme != "javascript" && scheme.isNotEmpty()) {
+                return true
+            }
+            return false
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
@@ -522,14 +506,10 @@ class BrowserActivity : AppCompatActivity() {
             ) return null
             // 去广告：无论是否走代理都拦截
             if (AdBlocker.shouldBlock(url)) return AdBlocker.emptyResponse()
-            // 代理关闭时直接加载
+            // 代理开启时通过 SOCKS 转发；关闭时直接加载
             if (!V2RayManager.isRunning()) return null
-            // API 28+ 由系统 WebView 代理（ProxyController）接管，这里不再做 SOCKS 转发
-            if (!V2RayManager.proxyHandledBySystem()) {
-                if ((request.method ?: "GET").equals("GET", true).not()) return null
-                return try { fetchViaSocks(request, url) } catch (e: Exception) { null }
-            }
-            return null
+            if ((request.method ?: "GET").equals("GET", true).not()) return null
+            return try { fetchViaSocks(request, url) } catch (e: Exception) { null }
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
@@ -545,7 +525,6 @@ class BrowserActivity : AppCompatActivity() {
         override fun onPageFinished(view: WebView, url: String?) {
             super.onPageFinished(view, url)
             if (tab.id == activeTabId) refreshNavButtons()
-            if (tab.isHome) reflectProxyOnHome()
             if (Settings.isUserScript(this@BrowserActivity)) {
                 val scripts = UserScriptEngine.loadAll(this@BrowserActivity)
                 val matched = UserScriptEngine.matches(url ?: "", scripts)
