@@ -31,15 +31,20 @@ jobs:
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       # 把官方 xray-core 二进制打进 APK，App 端无需任何 maven 依赖
+      # 版本号与 XTLS/Xray-core 官方 release 保持一致，避免下载 404 导致 APK 里缺二进制
       - name: Bundle xray-core binary (arm64-v8a)
         run: |
+          set -e
           mkdir -p app/src/main/assets/xray
-          curl -L -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-android-arm64-v8a.zip"
+          XRAY_VERSION="v26.3.27"
+          curl -L --fail -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-android-arm64-v8a.zip"
+          test -s /tmp/xray.zip
           unzip -o /tmp/xray.zip -d /tmp/xray-extract/
           cp /tmp/xray-extract/xray app/src/main/assets/xray/xray
           chmod +x app/src/main/assets/xray/xray
           rm -rf /tmp/xray.zip /tmp/xray-extract
           ls -la app/src/main/assets/xray/
+          test -s app/src/main/assets/xray/xray
 
       # 直接用 Gradle 二进制编译，避免依赖 gradle wrapper 的 jar（本地未生成）
       - name: Build debug APK (无需签名)
