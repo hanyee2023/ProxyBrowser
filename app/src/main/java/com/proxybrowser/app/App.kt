@@ -5,7 +5,7 @@ import com.proxybrowser.app.core.V2RayManager
 
 /**
  * 应用入口。
- * 预热：把 assets/xray/xray 复制到 nativeLibraryDir 并 chmod +x，避免第一次启动节点时再拷贝造成卡顿。
+ * 预热：确认 nativeLibraryDir 中的 libxray.so 可执行，避免第一次启动节点时再检测造成卡顿。
  */
 class App : Application() {
     override fun onCreate() {
