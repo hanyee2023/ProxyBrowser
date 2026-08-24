@@ -1,7 +1,6 @@
 package com.proxybrowser.app.core
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import com.proxybrowser.app.data.ProxyNode
 import org.json.JSONArray
@@ -12,9 +11,18 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * 通过 xray-core 二进制（随 APK 打包在 assets/xray/xray）启动本地 SOCKS5 代理，
+ * WebView 的请求经 shouldInterceptRequest 走 127.0.0.1:10808 出去。
+ *
+ * 关键点：
+ * 1. assets 里的二进制路径是 "xray/xray"（CI 下载后放在 assets/xray/ 目录下）。
+ * 2. config 必须根据节点类型生成真实 outbound（vless / vmess / trojan），
+ *    否则流量会走 freedom（直连），等于没代理。
+ * 3. Android 10+ 禁止在 filesDir 执行二进制，必须复制到 nativeLibraryDir。
+ */
 object V2RayManager {
 
     private const val TAG = "V2RayManager"
@@ -23,11 +31,13 @@ object V2RayManager {
     @Volatile private var process: Process? = null
     @Volatile private var activeNode: ProxyNode? = null
     @Volatile private var running = false
-    private val executor = Executors.newSingleThreadExecutor()
+    @Volatile private var logReader: Thread? = null
+    private val lastError = AtomicReference<String>("")
 
     fun start(ctx: Context, node: ProxyNode): Boolean {
         stop()
         val binaryPath = extractXray(ctx) ?: run {
+            lastError.set("xray 二进制未找到（assets/xray/xray 缺失）")
             Log.e(TAG, "xray binary not found in assets")
             return false
         }
@@ -35,6 +45,7 @@ object V2RayManager {
         try {
             configFile.writeText(buildConfig(node))
         } catch (e: Exception) {
+            lastError.set("写入配置文件失败")
             Log.e(TAG, "failed to write config", e)
             return false
         }
@@ -43,133 +54,111 @@ object V2RayManager {
             val cmd = listOf(binaryPath, "run", "-c", configFile.absolutePath)
             val pb = ProcessBuilder(cmd)
             pb.redirectErrorStream(true)
-            val proc = pb.start()
-            process = proc
-            // 后台排空 xray 输出，避免管道写满导致进程卡死
-            val errLog = StringBuilder()
-            val reader = BufferedReader(InputStreamReader(proc.inputStream))
-            executor.execute {
-                try { reader.forEachLine { errLog.appendLine(it) } } catch (_: Exception) {}
+            process = pb.start()
+            readLogs(process!!)
+
+            // 给 xray 完成启动解析的时间；配置错误会立刻退出
+            Thread.sleep(600)
+            if (process?.isAlive != true) {
+                val err = lastError.get().ifEmpty { "xray 进程立刻退出（配置不合法？）" }
+                Log.e(TAG, "xray exited immediately: $err")
+                cleanup()
+                false
+            } else if (!isSocksPortOpen(PORT, 2000)) {
+                Log.e(TAG, "xray started but SOCKS port $PORT is not listening")
+                cleanup()
+                false
+            } else {
+                activeNode = node
+                running = true
+                Log.i(TAG, "xray started for ${node.name}")
+                true
             }
-            // 等 SOCKS 端口真正就绪；若 xray 因配置错误立即退出则直接判定失败
-            val deadline = System.currentTimeMillis() + 4000
-            var bound = false
-            while (System.currentTimeMillis() < deadline) {
-                if (proc.isAlive.not()) {
-                    Log.e(TAG, "xray exited immediately (config error?). last log:\n$errLog")
-                    running = false
-                    process = null
-                    return false
-                }
-                if (tryConnect()) { bound = true; break }
-                Thread.sleep(120)
-            }
-            if (!bound) {
-                Log.e(TAG, "xray started but SOCKS port $PORT not ready. last log:\n$errLog")
-                running = false
-                try { proc.destroy() } catch (_: Exception) {}
-                process = null
-                return false
-            }
-            running = true
-            activeNode = node
-            Log.i(TAG, "xray started for ${node.name}")
-            applySystemProxy(ctx)
-            true
         } catch (e: Exception) {
+            lastError.set("启动 xray 异常：${e.javaClass.simpleName}")
             Log.e(TAG, "failed to start xray", e)
-            running = false
+            cleanup()
             false
         }
     }
 
     fun stop() {
+        cleanup()
+    }
+
+    private fun cleanup() {
         try { process?.destroy() } catch (_: Exception) {}
+        try { logReader?.interrupt() } catch (_: Exception) {}
         process = null
+        logReader = null
         activeNode = null
         running = false
-        clearSystemProxy()
     }
 
     fun isRunning(): Boolean = running && process?.isAlive == true
-
-    /** 预热：把 assets 里的 xray 二进制解压到 filesDir 并赋可执行权限 */
-    fun ensureInstalled(ctx: Context): Boolean = extractXray(ctx) != null
-
     fun activeNode(): ProxyNode? = activeNode
     fun port(): Int = PORT
-
-    /** API 28+ 由系统 WebView 代理接管，shouldInterceptRequest 不再做 SOCKS 转发 */
-    fun proxyHandledBySystem(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-
-    private fun tryConnect(): Boolean = try {
-        Socket().use { s -> s.connect(InetSocketAddress("127.0.0.1", PORT), 300) }
-        true
-    } catch (_: Exception) { false }
-
-    /**
-     * 通过系统 WebView 代理（ProxyController，API 28+）把浏览器流量路由到本地 SOCKS5。
-     * 用反射调用，避免某些构建环境下 android.webkit.ProxyController 在编译期不可见。
-     */
-    @Suppress("PrivateApi", "DiscouragedPrivateApi")
-    private fun applySystemProxy(ctx: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-        try {
-            val ctrlCls = Class.forName("android.webkit.ProxyController")
-            val controller = ctrlCls.getMethod("getInstance").invoke(null)!!
-            val builderCls = Class.forName("android.webkit.ProxyConfig\$Builder")
-            val builder = builderCls.getConstructor().newInstance()
-            builderCls.getMethod("addProxyRule", String::class.java)
-                .invoke(builder, "socks5://127.0.0.1:$PORT")
-            val config = builderCls.getMethod("build").invoke(builder)!!
-            val listener = Runnable { }
-            ctrlCls.getMethod(
-                "setProxyOverride",
-                Class.forName("android.webkit.ProxyConfig"),
-                Executor::class.java,
-                Runnable::class.java
-            ).invoke(controller, config, executor, listener)
-        } catch (e: Exception) {
-            Log.e(TAG, "applySystemProxy failed", e)
-        }
-    }
-
-    @Suppress("PrivateApi", "DiscouragedPrivateApi")
-    private fun clearSystemProxy() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-        try {
-            val ctrlCls = Class.forName("android.webkit.ProxyController")
-            val controller = ctrlCls.getMethod("getInstance").invoke(null)!!
-            val listener = Runnable { }
-            ctrlCls.getMethod("clearProxyOverride", Executor::class.java, Runnable::class.java)
-                .invoke(controller, executor, listener)
-        } catch (e: Exception) {
-            Log.e(TAG, "clearSystemProxy failed", e)
-        }
-    }
+    fun lastError(): String = lastError.get()
 
     private fun extractXray(ctx: Context): String? {
-        // Android 10+ 禁止在 filesDir 执行二进制；nativeLibraryDir 仍可执行
-        val nativeDir = ctx.applicationInfo.nativeLibraryDir?.let { File(it) }
-        val destDir = if (nativeDir != null && nativeDir.exists()) nativeDir else ctx.filesDir
-        val dest = File(destDir, "xray")
-        if (dest.exists() && dest.canExecute() && dest.length() > 0) return dest.absolutePath
+        // Android 10+ 只允许在 nativeLibraryDir 执行 ELF 二进制
+        val libDir = File(ctx.applicationInfo.nativeLibraryDir)
+        val dest = File(libDir, "xray")
+        if (dest.exists() && dest.canExecute()) return dest.absolutePath
         return try {
             ctx.assets.open("xray/xray").use { inStream ->
                 dest.outputStream().use { out -> inStream.copyTo(out) }
             }
-            dest.setExecutable(true)
+            dest.setExecutable(true, false)
             if (!dest.canExecute()) {
                 try {
                     Runtime.getRuntime().exec(arrayOf("chmod", "755", dest.absolutePath)).waitFor()
                 } catch (_: Exception) {}
             }
-            if (dest.canExecute()) dest.absolutePath else null
+            if (!dest.canExecute()) {
+                lastError.set("无法赋予 xray 可执行权限")
+                null
+            } else {
+                dest.absolutePath
+            }
         } catch (e: IOException) {
+            lastError.set("释放 xray 失败：${e.javaClass.simpleName}")
             Log.e(TAG, "extract xray failed", e)
             null
         }
     }
+
+    private fun readLogs(proc: Process) {
+        lastError.set("")
+        val t = Thread({
+            try {
+                BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val txt = line ?: ""
+                        Log.d(TAG, txt)
+                        // 记录最后一条 error/warning 以便 toast 展示
+                        if (txt.contains("failed", true) || txt.contains("error", true) ||
+                            txt.contains("invalid", true) || txt.contains("cannot", true)) {
+                            lastError.set(txt.take(120))
+                        }
+                    }
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (_: Exception) {}
+        }, "xray-logger")
+        t.isDaemon = true
+        t.start()
+        logReader = t
+    }
+
+    private fun isSocksPortOpen(port: Int, timeoutMs: Int): Boolean = try {
+        Socket().use { s ->
+            s.connect(InetSocketAddress("127.0.0.1", port), timeoutMs)
+            true
+        }
+    } catch (_: Exception) { false }
 
     // ============ xray 配置 ============
     private fun buildConfig(node: ProxyNode): String {
