@@ -9,7 +9,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -26,7 +25,6 @@ import com.proxybrowser.app.data.NodeStore
 import com.proxybrowser.app.data.ProxyNode
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.zip.GZIPInputStream
 import java.util.concurrent.Executors
 
 class ProxySettingsActivity : AppCompatActivity() {
@@ -125,18 +123,16 @@ class ProxySettingsActivity : AppCompatActivity() {
             return
         }
         val subs = NodeStore.loadSubs(this)
-        val nameByUrl = subs.associate { it.url to (it.name.ifEmpty { it.url }) }
         // 先按订阅顺序，再放未分组
-        val order = subs.map { it.url }.toMutableList()
+        val order = subs.toMutableList()
         if (groups.containsKey("")) order.add("")
         for (key in order) {
             val list = groups[key] ?: continue
-            val label = if (key.isEmpty()) "未分组（手动添加）" else (nameByUrl[key] ?: key)
-            content.addView(groupBlock(key, list, label))
+            content.addView(groupBlock(key, list))
         }
     }
 
-    private fun groupBlock(key: String, nodes: List<ProxyNode>, label: String): View {
+    private fun groupBlock(key: String, nodes: List<ProxyNode>): View {
         val ctx = this
         val wrap = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -153,8 +149,9 @@ class ProxySettingsActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(4, 6, 4, 6)
         }
+        val isUngrouped = key.isEmpty()
         val name = TextView(ctx).apply {
-            text = label
+            text = if (isUngrouped) "未分组（手动添加）" else key
             textSize = 14f
             setTextColor(getColor(R.color.text_primary))
             setTypeface(null, android.graphics.Typeface.BOLD)
@@ -261,49 +258,31 @@ class ProxySettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "已连接：${n.name}", Toast.LENGTH_SHORT).show()
         } else {
             NodeStore.setActive(this, null)
-            Toast.makeText(this, "连接失败，请检查节点配置", Toast.LENGTH_LONG).show()
+            val detail = V2RayManager.lastError()
+            val msg = if (detail.isNotEmpty()) "连接失败：$detail" else "连接失败，请检查节点配置"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
         rebuild()
     }
 
-    // ============ 添加订阅 / 单节点（含订阅名称） ============
+    // ============ 添加订阅 / 单节点 ============
     private fun addSubscription() {
-        val ctx = this
-        val layout = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 16, 24, 8)
-        }
-        val etName = EditText(ctx).apply {
-            hint = "订阅名称（如：我的节点A）"
-            setSingleLine()
-            setPadding(0, 12, 0, 12)
-            setTextColor(getColor(R.color.text_primary))
-        }
-        val divider = View(ctx).apply {
-            setBackgroundColor(getColor(R.color.divider))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
-        }
-        val etUrl = EditText(ctx).apply {
+        val et = EditText(this).apply {
             hint = "订阅链接 https://...  或  直接粘贴 vless:// / vmess:// / trojan://"
-            minHeight = (64 * resources.displayMetrics.density).toInt()
+            minHeight = (60 * resources.displayMetrics.density).toInt()
             setSingleLine(false)
-            setPadding(0, 12, 0, 8)
+            setPadding(24, 16, 24, 16)
             setTextColor(getColor(R.color.text_primary))
         }
-        layout.addView(etName)
-        layout.addView(divider)
-        layout.addView(etUrl)
-        AlertDialog.Builder(ctx)
+        AlertDialog.Builder(this)
             .setTitle("添加代理")
-            .setView(layout)
-            .setPositiveButton("确定") { _, _ ->
-                doImportOrAdd(etUrl.text.toString().trim(), etName.text.toString().trim())
-            }
+            .setView(et)
+            .setPositiveButton("确定") { _, _ -> doImportOrAdd(et.text.toString().trim()) }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun doImportOrAdd(raw: String, name: String = "") {
+    private fun doImportOrAdd(raw: String) {
         if (raw.isEmpty()) return
         if (raw.startsWith("vless://") || raw.startsWith("vmess://") || raw.startsWith("trojan://")) {
             val n = NodeParser.parseSingle(raw)
@@ -343,7 +322,7 @@ class ProxySettingsActivity : AppCompatActivity() {
                 val tagged = parsed.map { it.copy(subscription = raw) }
                 val nodes = (NodeStore.load(this) + tagged).distinctBy { NodeStore.keyOf(it) }.toMutableList()
                 NodeStore.save(this, nodes)
-                NodeStore.addSub(this, name, raw)
+                NodeStore.addSub(this, raw)
                 rebuild()
                 Toast.makeText(this, "已导入 ${tagged.size} 个节点", Toast.LENGTH_SHORT).show()
             }
@@ -369,9 +348,7 @@ class ProxySettingsActivity : AppCompatActivity() {
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13; ProxyBrowser)")
             }
-            val enc = conn.contentEncoding?.lowercase()
-            val stream = if (enc == "gzip") GZIPInputStream(conn.inputStream) else conn.inputStream
-            stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } catch (e: Exception) {
             ""
         } finally {
@@ -421,73 +398,24 @@ class ProxySettingsActivity : AppCompatActivity() {
         Toast.makeText(this, "已按延迟从低到高排序", Toast.LENGTH_SHORT).show()
     }
 
-    // ============ 删除（多选 + 确认） ============
+    // ============ 删除 ============
     private fun deleteMenu() {
-        val ctx = this
-        val subs = NodeStore.loadSubs(this)
-        val hasUngrouped = NodeStore.load(this).any { it.subscription.isEmpty() }
-
-        val scroll = ScrollView(ctx)
-        val list = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16, 8, 16, 8)
-        }
-        val checks = mutableMapOf<String, Boolean>() // 订阅 url -> 是否勾选
-        var ungroupedChecked = false
-
-        for (sub in subs) {
-            val row = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(4, 10, 4, 10)
-            }
-            val cb = CheckBox(ctx).apply {
-                text = if (sub.name.isNotEmpty()) sub.name else sub.url
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            cb.setOnCheckedChangeListener { _, isC -> checks[sub.url] = isC }
-            row.addView(cb)
-            list.addView(row)
-        }
-
-        if (hasUngrouped) {
-            val row = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(4, 10, 4, 10)
-            }
-            val cb = CheckBox(ctx).apply {
-                text = "未分组节点（手动添加）"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            cb.setOnCheckedChangeListener { _, isC -> ungroupedChecked = isC }
-            row.addView(cb)
-            list.addView(row)
-        }
-        scroll.addView(list)
-
-        AlertDialog.Builder(ctx)
-            .setTitle("删除订阅 / 节点（可多选）")
-            .setView(scroll)
-            .setPositiveButton("确认删除") { _, _ ->
-                var deletedSubs = 0
-                for (sub in subs) {
-                    if (checks[sub.url] == true) {
-                        NodeStore.deleteSub(ctx, sub.url)
-                        deletedSubs++
-                    }
-                }
-                if (ungroupedChecked) {
-                    val remaining = NodeStore.load(ctx).filter { it.subscription.isNotEmpty() }
-                    NodeStore.save(ctx, remaining)
+        val subs = NodeStore.loadSubs(this).toMutableList()
+        val options = subs.toMutableList()
+        options.add("■ 未分组节点（手动添加）")
+        val labels = options.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("删除订阅 / 节点")
+            .setItems(labels) { _, which ->
+                val sel = options[which]
+                if (sel.startsWith("■ 未分组")) {
+                    val remaining = NodeStore.load(this).filter { it.subscription.isNotEmpty() }
+                    NodeStore.save(this, remaining)
+                } else {
+                    NodeStore.deleteSub(this, sel)
                 }
                 rebuild()
-                val msg = if (deletedSubs > 0 || ungroupedChecked) "已删除 $deletedSubs 个订阅" else "未选择任何项"
-                Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
