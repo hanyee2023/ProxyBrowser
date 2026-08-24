@@ -14,11 +14,11 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * 通过 xray-core 二进制（随 APK 打包在 assets/xray/xray）启动本地 SOCKS5 代理，
- * WebView 的请求经 shouldInterceptRequest 走 127.0.0.1:10808 出去。
+ * 通过 xray-core 二进制（随 APK 作为 native lib 打包在 jniLibs/arm64-v8a/libxray.so）
+ * 启动本地 SOCKS5 代理，WebView 的请求经 shouldInterceptRequest 走 127.0.0.1:10808 出去。
  *
  * 关键点：
- * 1. assets 里的二进制路径是 "xray/xray"（CI 下载后放在 assets/xray/ 目录下）。
+ * 1. xray 以 libxray.so 形式打包，安装后由系统提取到 nativeLibraryDir。
  * 2. config 必须根据节点类型生成真实 outbound（vless / vmess / trojan），
  *    否则流量会走 freedom（直连），等于没代理。
  * 3. Android 10+ 禁止在 filesDir 执行二进制，必须复制到 nativeLibraryDir。
@@ -109,31 +109,14 @@ object V2RayManager {
     }
 
     private fun extractXray(ctx: Context): String? {
-        // Android 10+ 只允许在 nativeLibraryDir 执行 ELF 二进制
+        // Android 10+ 只允许在 nativeLibraryDir 执行 ELF 二进制。
+        // xray 作为 libxray.so 随 APK 打包，系统安装时已提取到 nativeLibraryDir。
         val libDir = File(ctx.applicationInfo.nativeLibraryDir)
-        val dest = File(libDir, "xray")
+        val dest = File(libDir, "libxray.so")
         if (dest.exists() && dest.canExecute()) return dest.absolutePath
-        return try {
-            ctx.assets.open("xray/xray").use { inStream ->
-                dest.outputStream().use { out -> inStream.copyTo(out) }
-            }
-            dest.setExecutable(true, false)
-            if (!dest.canExecute()) {
-                try {
-                    Runtime.getRuntime().exec(arrayOf("chmod", "755", dest.absolutePath)).waitFor()
-                } catch (_: Exception) {}
-            }
-            if (!dest.canExecute()) {
-                lastError.set("无法赋予 xray 可执行权限")
-                null
-            } else {
-                dest.absolutePath
-            }
-        } catch (e: IOException) {
-            lastError.set("释放 xray 失败：${e.javaClass.simpleName}")
-            Log.e(TAG, "extract xray failed", e)
-            null
-        }
+        lastError.set("xray 二进制未找到（${dest.absolutePath} 缺失或不可执行）")
+        Log.e(TAG, "xray binary not found at ${dest.absolutePath}")
+        return null
     }
 
     private fun readLogs(proc: Process) {
