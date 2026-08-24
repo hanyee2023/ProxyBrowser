@@ -100,6 +100,14 @@ object V2RayManager {
     fun port(): Int = PORT
     fun lastError(): String = lastError.get()
 
+    /**
+     * 应用启动时预热：把 xray 二进制释放到 nativeLibraryDir。
+     * 失败不抛异常，避免 App 启动崩溃。
+     */
+    fun ensureInstalled(ctx: Context) {
+        extractXray(ctx)
+    }
+
     private fun extractXray(ctx: Context): String? {
         // Android 10+ 只允许在 nativeLibraryDir 执行 ELF 二进制
         val libDir = File(ctx.applicationInfo.nativeLibraryDir)
