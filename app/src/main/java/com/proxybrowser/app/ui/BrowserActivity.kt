@@ -496,14 +496,23 @@ class BrowserActivity : AppCompatActivity() {
         private val tag = "ProxyClient"
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val url = request.url.toString()
-            if (url.startsWith("mailto:") || url.startsWith("tel:") ||
-                url.startsWith("intent:") || url.startsWith("magnet:") || url.endsWith(".apk", true)
-            ) {
-                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
-                return true
+            val url = request.url
+            val scheme = url.scheme?.lowercase() ?: ""
+            // http/https 交给 WebView 自己处理
+            if (scheme == "http" || scheme == "https") return false
+            // 已知的可调用外部 App 的 scheme
+            when {
+                scheme == "mailto" || scheme == "tel" || scheme == "sms" -> {
+                    try { startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (_: Exception) {}
+                    return true
+                }
+                scheme == "intent" -> {
+                    try { startActivity(Intent.parseUri(url.toString(), Intent.URI_INTENT_SCHEME)) } catch (_: Exception) {}
+                    return true
+                }
             }
-            return false
+            // 其它自定义 scheme（baiduboxapp://、weixin:// 等）直接拦截，不让 WebView 加载
+            return true
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
