@@ -1,12 +1,15 @@
 name: Build APK
 
-# 推送到 GitHub 后，GitHub 的云服务器会自动编译出 APK（你本机无需装 Android Studio）。
-# 默认出「debug 包」：无需签名、可直接装手机验证。
-# 想出可签名的 release 包，见文件底部「可选：签名 release」说明。
+# 推送到 main 后自动编译 debug APK，产物在 Actions → 本次运行 → Artifacts。
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+
+env:
+  # xray-core 版本：选有 android-arm64-v8a 产物的稳定版
+  XRAY_VERSION: v26.10.10
+  XRAY_SHA256: cbd594a6dfd4bef98283788e10fb2c299cb3c8af61b5b3ffdb1be4e96da955ef
 
 jobs:
   build:
@@ -26,75 +29,112 @@ jobs:
 
       - name: Install SDK platform & build-tools
         run: |
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       # 把官方 xray-core 二进制作为 native lib 打进 APK。
-      # Android 10+ 只能从 nativeLibraryDir 执行 ELF，系统安装时会自动把 .so 提取到该目录。
+      # Android 10+ 只允许从 nativeLibraryDir 执行 ELF，系统安装时会自动把 .so 提取到该目录。
+      # 文件名必须是 lib*.so，否则 AGP 不会把它当 native lib 处理。
       - name: Bundle xray-core binary (arm64-v8a)
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          XRAY_VERSION="v26.3.27"
-          curl -L --fail -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-android-arm64-v8a.zip"
-          test -s /tmp/xray.zip
+          URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-android-arm64-v8a.zip"
+          echo "downloading $URL"
+          curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 -o /tmp/xray.zip "$URL"
+          echo "${XRAY_SHA256}  /tmp/xray.zip" | sha256sum -c -
           unzip -o /tmp/xray.zip -d /tmp/xray-extract/
+          ls -la /tmp/xray-extract/
           cp /tmp/xray-extract/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
-          rm -rf /tmp/xray.zip /tmp/xray-extract
-          ls -la app/src/main/jniLibs/arm64-v8a/
+          file app/src/main/jniLibs/arm64-v8a/libxray.so
+          /tmp/xray-extract/xray version || true
           test -s app/src/main/jniLibs/arm64-v8a/libxray.so
+          rm -rf /tmp/xray.zip /tmp/xray-extract
 
-      # 直接用 Gradle 二进制编译，避免依赖 gradle wrapper 的 jar（本地未生成）
-      - name: Build debug APK (无需签名)
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Build debug APK
         run: |
           curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /opt
-          /opt/gradle-8.7/bin/gradle clean assembleDebug --no-daemon --no-build-cache
+          /opt/gradle-8.7/bin/gradle clean assembleDebug --no-daemon --stacktrace
+
+      # 关键校验：xray 二进制必须以「可执行」权限位进 APK。
+      # AGP 打包 .so 时默认写 644，Android 解压后没有 x 位，导致
+      # ProcessBuilder 报 Permission denied —— 表现为「代理开启失败」。
+      # 这里先检查，再直接把 zip 内条目权限改成 0755。
+      - name: Verify & fix libxray.so exec bit inside APK
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "APK = $APK"
+          unzip -l "$APK" | grep 'lib/arm64-v8a/libxray.so' || { echo "::error::APK 里没有 libxray.so"; exit 1; }
+          SIZE=$(unzip -l "$APK" | awk '/lib\/arm64-v8a\/libxray.so/{print $1}')
+          echo "libxray.so size = $SIZE"
+          if [ "$SIZE" -lt 1000000 ]; then echo "::error::libxray.so 体积异常（可能是占位文件）"; exit 1; fi
+
+          python3 - "$APK" <<'PY'
+          import sys, zipfile, shutil, os
+          apk = sys.argv[1]
+          target = 'lib/arm64-v8a/libxray.so'
+          with zipfile.ZipFile(apk) as z:
+              info = z.getinfo(target)
+              print('before: external_attr=0x%08x' % info.external_attr)
+              already = (info.external_attr >> 16) & 0o777
+          if already & 0o111:
+              print('exec bit already present:', oct(already))
+              sys.exit(0)
+
+          tmp = apk + '.tmp'
+          with zipfile.ZipFile(apk) as zin, zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  data = zin.read(item.filename)
+                  if item.filename == target:
+                      # 0755 + regular file
+                      item.external_attr = (0o100755 & 0xFFFF) << 16
+                      item.create_system = 3
+                  zout.writestr(item, data)
+          shutil.move(tmp, apk)
+          with zipfile.ZipFile(apk) as z:
+              info = z.getinfo(target)
+              fixed = (info.external_attr >> 16) & 0o777
+          print('after: %s' % oct(fixed))
+          assert fixed & 0o111, 'exec bit still missing'
+          print('OK: libxray.so is executable inside APK')
+          PY
+          unzip -Z -v "$APK" lib/arm64-v8a/libxray.so | grep -i 'unix file attributes' || true
+
+      # 重新签名：上一步改过 zip，原签名已失效
+      - name: Re-sign APK
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          BT=/usr/local/lib/android/sdk/build-tools/34.0.0
+          [ -d "$BT" ] || BT=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
+          KS=/tmp/debug.keystore
+          rm -f "$KS"
+          keytool -genkeypair -v -keystore "$KS" -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          "$BT/zipalign" -f -p 4 "$APK" "${APK%.apk}-aligned.apk"
+          "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androiddebugkey --out "${APK%.apk}-signed.apk" "${APK%.apk}-aligned.apk"
+          mv "${APK%.apk}-signed.apk" "$APK"
+          rm -f "${APK%.apk}-aligned.apk"
+          "$BT/apksigner" verify --print-certs "$APK" | head -5
+          echo "signed OK: $APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: proxy-browser-apk
           path: app/build/outputs/apk/debug/*.apk
-
-# ---------------------------------------------------------------------------
-# 可选：签名 release 包（分发用）
-# 1) 本地生成 keystore：keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias proxy
-# 2) 仓库 Settings → Secrets 添加：KEYSTORE_BASE64 (base64 release.jks)、KEYSTORE_PASSWORD、KEY_ALIAS、KEY_PASSWORD
-# 3) 取消下面的 job 注释，并把上面 debug 步骤替换成 release 步骤。
-# ---------------------------------------------------------------------------
-#  release:
-#    needs: build
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#      - uses: actions/setup-java@v4
-#        with:
-#          distribution: temurin
-#          java-version: 17
-#      - uses: android-actions/setup-android@v3
-#      - run: |
-#          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-#          yes | sdkmanager --licenses || true
-#          sdkmanager "platforms;android-34" "build-tools;34.0.0"
-#      - name: Decode keystore
-#        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
-#      - name: Build release APK
-#        env:
-#          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-#          KEYSTORE_PATH: ${{ github.workspace }}/app/release.jks
-#          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-#          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-#          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-#        run: |
-#          curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
-#          unzip -q /tmp/gradle.zip -d /opt
-#          /opt/gradle-8.7/bin/gradle clean assembleRelease --no-daemon --no-build-cache
-#      - uses: actions/upload-artifact@v4
-#        with:
-#          name: proxy-browser-release-apk
-#          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
