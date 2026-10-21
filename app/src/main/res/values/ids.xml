@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 纯代码构建 UI，这里只声明需要在代码里 findViewById 的容器 id -->
+    <item name="sheetBody" type="id" />
+    <item name="sheetTitle" type="id" />
+</resources>

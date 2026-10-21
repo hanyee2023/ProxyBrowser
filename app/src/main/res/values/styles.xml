@@ -1,50 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- base parent styles (dot-notation inheritance target) -->
-    <style name="Btn">
-        <item name="android:textColor">@color/text_primary</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 全局主题：无 ActionBar，透明状态栏 + 浅色系统栏图标 -->
+    <style name="Theme.ProxyBrowser" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorPrimaryDark">@color/bg</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="colorOnPrimary">@color/text_on_accent</item>
+        <item name="colorSecondary">@color/accent_light</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="alertDialogTheme">@style/Theme.PB.Dialog</item>
+        <item name="materialAlertDialogTheme">@style/Theme.PB.Dialog</item>
     </style>
-    <style name="Card">
-        <item name="android:background">@color/surface</item>
+
+    <!-- 弹窗：24dp 大圆角 + 蓝色操作按钮 -->
+    <style name="Theme.PB.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="android:windowMinWidthMajor">88%</item>
+        <item name="android:windowMinWidthMinor">88%</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Btn.Dialog.Primary</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Btn.Dialog.Ghost</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Btn.Dialog.Ghost</item>
     </style>
+
+    <style name="Btn.Dialog.Primary" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Btn.Dialog.Ghost" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <!-- 文字 -->
     <style name="Text">
         <item name="android:textColor">@color/text_primary</item>
     </style>
 
     <style name="Text.Title">
-        <item name="android:textSize">20sp</item>
+        <item name="android:textSize">17sp</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textStyle">bold</item>
     </style>
+
     <style name="Text.Body">
         <item name="android:textSize">15sp</item>
         <item name="android:textColor">@color/text_primary</item>
     </style>
+
     <style name="Text.Caption">
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">12.5sp</item>
         <item name="android:textColor">@color/text_secondary</item>
     </style>
-    <style name="Text.Tiny">
-        <item name="android:textSize">11sp</item>
-        <item name="android:textColor">@color/text_secondary</item>
-    </style>
-    <style name="Btn.Ghost">
-        <item name="android:background">@android:color/transparent</item>
-        <item name="android:textColor">@color/accent</item>
-        <item name="android:padding">8dp</item>
-    </style>
-    <style name="Btn.Primary">
-        <item name="android:background">@color/accent</item>
-        <item name="android:textColor">@color/bg</item>
-        <item name="android:padding">8dp</item>
-    </style>
-    <style name="Btn.Secondary">
-        <item name="android:background">@android:color/transparent</item>
-        <item name="android:textColor">@color/text_primary</item>
-        <item name="android:padding">8dp</item>
-    </style>
-    <style name="Card.Surface">
-        <item name="android:background">@color/surface</item>
-        <item name="android:padding">12dp</item>
-    </style>
+
 </resources>

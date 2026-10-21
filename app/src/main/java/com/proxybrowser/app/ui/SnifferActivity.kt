@@ -6,112 +6,222 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.view.LayoutInflater
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import com.proxybrowser.app.R
 import com.proxybrowser.app.core.VideoSniffer
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * P4：嗅探到的视频列表页。
- *   - 长按复制链接
- *   - 跳到系统下载（如果用户装了第三方下载器）
- *   - 单条可删除
+ * 视频嗅探结果页（夸克风格卡片流）。
+ * 支持单条复制 / 用系统播放器打开 / 删除，以及整体清空。
  */
 class SnifferActivity : AppCompatActivity() {
 
-    private lateinit var rv: RecyclerView
-    private lateinit var emptyView: View
-    private val items = mutableListOf<VideoSniffer.Media>()
+    private lateinit var list: LinearLayout
+    private lateinit var emptyBlock: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_sniffer)
-        rv = findViewById(R.id.list)
-        emptyView = findViewById(R.id.empty)
-        rv.layoutManager = LinearLayoutManager(this)
-        rv.adapter = MediaAdapter()
-        findViewById<Button>(R.id.btnClear).setOnClickListener {
-            VideoSniffer.clear()
-            items.clear()
-            refresh()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        VideoSniffer.load(this)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Ui.color(this@SnifferActivity, R.color.bg))
         }
-        findViewById<Button>(R.id.btnBack).setOnClickListener { finish() }
+        root.addView(Ui.topBar(this, "视频嗅探", Ui.ghostButton(this, "清空") { confirmClear() }))
+        root.addView(TextView(this).apply {
+            text = "浏览含视频的页面后，这里会列出可播放/可下载的媒体地址"
+            textSize = 11.5f
+            setTextColor(Ui.color(this@SnifferActivity, R.color.text_tertiary))
+            setPadding(
+                Ui.dp(this@SnifferActivity, 20), 0,
+                Ui.dp(this@SnifferActivity, 20), Ui.dp(this@SnifferActivity, 10)
+            )
+        })
+
+        val scroll = ScrollView(this)
+        list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(
+                Ui.dp(this@SnifferActivity, 14), 0,
+                Ui.dp(this@SnifferActivity, 14), Ui.dp(this@SnifferActivity, 28)
+            )
+        }
+        scroll.addView(list)
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        emptyBlock = buildEmpty()
+        setContentView(root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            root.updatePadding(top = bars.top, bottom = bars.bottom)
+            insets
+        }
+        refresh()
     }
 
     override fun onResume() {
         super.onResume()
-        items.clear()
-        items.addAll(VideoSniffer.all())
         refresh()
     }
 
-    private fun refresh() {
-        if (items.isEmpty()) {
-            emptyView.visibility = View.VISIBLE
-            rv.visibility = View.GONE
-        } else {
-            emptyView.visibility = View.GONE
-            rv.visibility = View.VISIBLE
-        }
-        rv.adapter?.notifyDataSetChanged()
+    private fun buildEmpty(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(
+            Ui.dp(this@SnifferActivity, 30), Ui.dp(this@SnifferActivity, 80),
+            Ui.dp(this@SnifferActivity, 30), 0
+        )
+        addView(TextView(this@SnifferActivity).apply {
+            text = "🎬"
+            textSize = 36f
+            gravity = Gravity.CENTER
+        })
+        addView(TextView(this@SnifferActivity).apply {
+            text = "还没有嗅探到视频"
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Ui.color(this@SnifferActivity, R.color.text_primary))
+            gravity = Gravity.CENTER
+            setPadding(0, Ui.dp(this@SnifferActivity, 12), 0, 0)
+        })
+        addView(TextView(this@SnifferActivity).apply {
+            text = "确认「设置 → 视频嗅探」已开启，\n然后打开视频页面并点击播放"
+            textSize = 12.5f
+            setTextColor(Ui.color(this@SnifferActivity, R.color.text_secondary))
+            gravity = Gravity.CENTER
+            setLineSpacing(Ui.dp(this@SnifferActivity, 4).toFloat(), 1f)
+            setPadding(0, Ui.dp(this@SnifferActivity, 8), 0, 0)
+        })
     }
 
-    private inner class MediaAdapter : RecyclerView.Adapter<MediaAdapter.VH>() {
-        inner class VH(view: View) : RecyclerView.ViewHolder(view) {
-            val ext: TextView = view.findViewById(R.id.tvExt)
-            val url: TextView = view.findViewById(R.id.tvUrl)
-            val page: TextView = view.findViewById(R.id.tvPage)
-            val action: Button = view.findViewById(R.id.btnAction)
-            val del: Button = view.findViewById(R.id.btnDel)
+    private fun refresh() {
+        list.removeAllViews()
+        val items = VideoSniffer.getAll(this)
+        if (items.isEmpty()) {
+            list.addView(emptyBlock)
+            return
         }
+        items.forEach { list.addView(itemCard(it)) }
+    }
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_media, parent, false)
-            return VH(v)
-        }
-
-        override fun onBindViewHolder(h: VH, pos: Int) {
-            val m = items[pos]
-            h.ext.text = m.ext.uppercase().ifEmpty { "?" }
-            h.url.text = m.url
-            h.page.text = m.title.ifEmpty { m.pageUrl }
-            h.action.text = "下载"
-            h.action.setOnClickListener {
-                try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(m.url))
-                    startActivity(intent)
-                } catch (_: Exception) {
-                    copy(m.url)
-                    Toast.makeText(this@SnifferActivity, "未找到下载器，链接已复制", Toast.LENGTH_SHORT).show()
-                }
+    private fun itemCard(m: VideoSniffer.Media): View {
+        val ctx = this
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = Ui.dp(ctx, 18).toFloat()
+                setColor(Ui.color(ctx, R.color.bg_soft))
             }
-            h.itemView.setOnLongClickListener { copy(m.url); true }
-            h.del.setOnClickListener {
-                items.removeAt(pos)
-                // 同时清掉 VideoSniffer 内的项
-                val all = VideoSniffer.all().toMutableList()
-                all.removeAll { it.url == m.url }
-                // 直接重写 store（这里简化）
-                VideoSniffer.clear()
-                all.forEach { VideoSniffer.add(this@SnifferActivity, it) }
-                refresh()
-            }
+            setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 13), Ui.dp(ctx, 14), Ui.dp(ctx, 11))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = Ui.dp(ctx, 10) }
         }
 
-        override fun getItemCount(): Int = items.size
+        val head = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(Ui.pillTag(ctx, m.ext.removePrefix(".").uppercase(), Ui.color(ctx, R.color.accent)))
+        head.addView(TextView(ctx).apply {
+            text = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(m.time))
+            textSize = 11f
+            setTextColor(Ui.color(ctx, R.color.text_tertiary))
+            setPadding(Ui.dp(ctx, 8), 0, 0, 0)
+        })
+        card.addView(head)
+
+        card.addView(TextView(ctx).apply {
+            text = m.title.ifEmpty { guessName(m.url) }
+            textSize = 13.5f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Ui.color(ctx, R.color.text_primary))
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, Ui.dp(ctx, 7), 0, 0)
+        })
+        card.addView(TextView(ctx).apply {
+            text = m.url
+            textSize = 11f
+            setTextColor(Ui.color(ctx, R.color.text_tertiary))
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setPadding(0, Ui.dp(ctx, 4), 0, 0)
+        })
+
+        val actions = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, Ui.dp(ctx, 10), 0, 0)
+        }
+        actions.addView(Ui.ghostButton(ctx, "复制") { copy(m.url) })
+        actions.addView(Ui.ghostButton(ctx, "播放") { openWith(m.url) }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = Ui.dp(ctx, 8) }
+        })
+        actions.addView(Ui.ghostButton(ctx, "删除") {
+            VideoSniffer.remove(ctx, m.url)
+            refresh()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = Ui.dp(ctx, 8) }
+        })
+        card.addView(actions)
+        return card
+    }
+
+    private fun guessName(url: String): String {
+        val path = url.substringBefore('?')
+        return path.substringAfterLast('/').ifEmpty { url }
     }
 
     private fun copy(s: String) {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("video", s))
-        Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "链接已复制", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun openWith(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            copy(url)
+            Toast.makeText(this, "未找到可用的播放器，链接已复制", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun confirmClear() {
+        if (VideoSniffer.getAll(this).isEmpty()) {
+            Toast.makeText(this, "列表已经是空的", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this, R.style.Theme_PB_Dialog)
+            .setTitle("清空嗅探记录")
+            .setMessage("只清空这个列表，不影响已下载的文件。")
+            .setPositiveButton("清空") { _, _ ->
+                VideoSniffer.clear(this)
+                refresh()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }

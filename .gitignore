@@ -1,12 +1,11 @@
 *.iml
 .gradle/
 local.properties
-.gradle/
+.idea/
+.DS_Store
 build/
 captures/
 .externalNativeBuild/
-.DS_Store
-*.apk
-
-# xray 二进制由 gradle downloadXray task 在编译时下载，不入库（避免 20MB 二进制进 git）
-app/src/main/assets/xray/xray
+.cxx/
+app/src/main/jniLibs/
+app/src/main/assets/xray/

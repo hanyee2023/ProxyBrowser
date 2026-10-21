@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ProxyBrowser</string>
-    <string name="hint_url">Search or enter URL</string>
-    <string name="toast_xray_failed">Proxy start failed, reinstall app</string>
-    <string name="home_search_hint">Search or enter URL</string>
-    <string name="home_subtitle">Lightweight proxy browser · AdBlock · Userscripts · Sniffer</string>
+    <string name="hint_url">搜索或输入网址</string>
+    <string name="toast_xray_failed">代理启动失败，请查看内核日志</string>
+    <string name="home_search_hint">搜索或输入网址</string>
+    <string name="home_subtitle">轻量代理浏览器 · 广告拦截 · 视频嗅探</string>
+
+    <string name="btn_back">后退</string>
+    <string name="btn_forward">前进</string>
+    <string name="btn_refresh">刷新</string>
+    <string name="btn_home">主页</string>
+    <string name="btn_tabs">窗口</string>
+    <string name="btn_menu">菜单</string>
+    <string name="btn_sniffer">嗅探</string>
+    <string name="btn_settings">设置</string>
 </resources>

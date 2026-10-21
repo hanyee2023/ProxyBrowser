@@ -26,7 +26,7 @@ class SettingsActivity : AppCompatActivity() {
         // 顶部栏
         val back = ImageView(ctx).apply {
             setImageResource(R.drawable.ic_back)
-            setBackgroundResource(R.drawable.bg_btn_ghost)
+            setBackgroundResource(R.drawable.bg_ripple)
             val p = (10 * resources.displayMetrics.density).toInt()
             setPadding(p, p, p, p)
             val s = dp(36)
@@ -120,7 +120,7 @@ class SettingsActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(16, 18, 16, 18)
-            setBackgroundResource(R.drawable.bg_btn_ghost)
+            setBackgroundResource(R.drawable.bg_ripple)
         }
         val tv = TextView(ctx).apply {
             text = name
