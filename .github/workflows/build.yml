@@ -58,14 +58,13 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
       - name: Build debug APK
         run: |
-          curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /opt
-          /opt/gradle-8.7/bin/gradle clean assembleDebug --no-daemon --stacktrace
+          chmod +x gradlew
+          ./gradlew clean assembleDebug --no-daemon --stacktrace
 
       # 关键校验：xray 二进制必须以「可执行」权限位进 APK。
       # AGP 打包 .so 时默认写 644，Android 解压后没有 x 位，导致

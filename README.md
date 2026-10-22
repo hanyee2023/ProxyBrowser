@@ -79,6 +79,7 @@ WebView
 | `ui/Ui.kt` | 共用 UI 积木（圆角、胶囊、按钮） |
 | `res/drawable/*` | 全部图标为矢量，统一 `tint`，圆润线性风格 |
 | `tools/verify_xray_config.py` | 用真实 xray 二进制校验配置（18 种协议组合） |
+| `dev-setup.sh` | Codespaces 一键装环境 + 出 APK（含 .so 权限修正与重签名） |
 
 ---
 
@@ -114,20 +115,50 @@ WebView
 
 ## 5. 构建
 
-**云端（推荐）**：push 到 `main` 即可，`.github/workflows/build.yml` 会自动
-下载 xray → 打包 → 校验 `.so` 可执行位 → 重签名 → 上传 Artifacts。
+### 方式 A：Codespaces 里直接出包（推荐先这样验证）
 
-**本地**：
+不需要本地环境，也不需要等 CI。上传源码后一条命令：
 
 ```bash
-# 有真 xray 就放进去（CI 会自动做这步）
+bash dev-setup.sh
+```
+
+脚本会依次完成：
+
+1. 装 JDK 17 + 基础工具
+2. 装 Android SDK（platform 34 / build-tools 34.0.0 / platform-tools）
+3. 下载真 xray 二进制（github 直连失败会自动切 `gh-proxy.com` 等镜像）+ sha256 校验 + 架构校验
+4. 编译 debug APK
+5. **校验 APK 内 `.so` 的可执行位，没有就修正为 0755 并重新签名**
+
+产物在 `app/build/outputs/apk/debug/app-debug.apk`，左侧文件树右键即可下载。
+
+常用参数：
+
+```bash
+bash dev-setup.sh --skip-build   # 只装环境，不编译
+bash dev-setup.sh --clean        # 先 clean 再编译
+```
+
+> 第 5 步很关键。AGP 打包 `.so` 默认写 `644`（无执行位），
+> Android 解压后没有 `x` 位，App 会报「内核缺失」——这是「代理连不上」的根因之一。
+> 脚本会自动修掉，所以**本地出的包也能正常用**，不必非得等 CI。
+
+### 方式 B：云端 CI
+
+push 到 `main` 即可，`.github/workflows/build.yml` 会自动
+下载 xray → 打包 → 校验 `.so` 可执行位 → 重签名 → 上传 Artifacts。
+
+### 方式 C：本地命令行
+
+```bash
 cp /path/to/xray app/src/main/jniLibs/arm64-v8a/libxray.so
 ./gradlew assembleDebug
 ```
 
 本地没有二进制时，`app/build.gradle.kts` 里的 `ensureXrayBinary` 会自动生成一个
 1.1MB 的**占位文件**，让编译照常通过（用于验证 UI 与编译链路）。
-注意：这样打出的 APK 代理功能不可用，装到手机上日志会提示「内核缺失」——这是预期行为。
+注意：这样打出的 APK 代理功能不可用——`dev-setup.sh` 会检测并拒绝这种包。
 
 ---
 
